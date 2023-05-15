@@ -38,6 +38,7 @@
 // And those used for inputs
 #define HOOK_PIN 0
 #define PLAYBACK_BUTTON_PIN 1
+#define REDIAL_BUTTON_PIN 3
 
 #define noINSTRUMENT_SD_WRITE
 
@@ -65,6 +66,7 @@ File frec;
 // Use long 40ms debounce time on both switches
 Bounce buttonRecord = Bounce(HOOK_PIN, 40);
 Bounce buttonPlay = Bounce(PLAYBACK_BUTTON_PIN, 40);
+Bounce buttonRedial = Bounce(REDIAL_BUTTON_PIN, 40);
 
 // Keep track of current state of the device
 enum Mode {Initialising, Ready, Prompting, Recording, Playing};
@@ -101,6 +103,7 @@ void setup() {
   // Configure the input pins
   pinMode(HOOK_PIN, INPUT_PULLUP);
   pinMode(PLAYBACK_BUTTON_PIN, INPUT_PULLUP);
+  pinMode(REDIAL_BUTTON_PIN, INPUT_PULLUP);
 
   // Audio connections require memory, and the record queue
   // uses this memory to buffer incoming audio.
@@ -111,7 +114,7 @@ void setup() {
   // Define which input on the audio shield to use (AUDIO_INPUT_LINEIN / AUDIO_INPUT_MIC)
   sgtl5000_1.inputSelect(AUDIO_INPUT_MIC);
   //sgtl5000_1.adcHighPassFilterDisable(); //
-  sgtl5000_1.volume(0.95);
+  sgtl5000_1.volume(0.5);
 
   mixer.gain(0, 1.0f);
   mixer.gain(1, 1.0f);
@@ -147,7 +150,7 @@ void setup() {
     
     // Value in dB
 //  sgtl5000_1.micGain(15);
-  sgtl5000_1.micGain(5); // much lower gain is required for the AOM5024 electret capsule
+  sgtl5000_1.micGain(30);  // much lower gain is required for the AOM5024 electret capsule
 
   // Synchronise the Time object used in the program code with the RTC time provider.
   // See https://github.com/PaulStoffregen/Time
@@ -201,7 +204,9 @@ void loop() {
           playLastRecording();
           return;
         }
-        
+        if (buttonRedial.risingEdge()) {
+          Serial.println("Redial Button Pressed");
+        }
       }
       // Debug message
       Serial.println("Starting Recording");
