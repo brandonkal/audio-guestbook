@@ -24,6 +24,7 @@ teensytools.path={runtime.hardware.path}/../tools/
 #teensytools.path={runtime.tools.teensy-tools.path}/
 
 build.flags.audio=-DAUDIO_BLOCK_SAMPLES=128
+#debug.toolchain.path={compiler.path}{build.toolchain}
 
 ## EEPROM Data
 compiler.objcopy.eep.flags=-O ihex -j .eeprom --set-section-flags=.eeprom=alloc,load --no-change-warnings --change-section-lma .eeprom=0

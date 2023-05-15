@@ -1,23 +1,15 @@
 /**
- * Audio Guestbook, Copyright (c) 2022 Playful Technology
+ * Audio Guestbook, Copyright (c) 2023 Brandon Kalinowski and Playful Technology
  * 
  * Tested using a Teensy 4.0 with Teensy Audio Shield, although should work 
  * with minor modifications on other similar hardware
  * 
  * When handset is lifted, a pre-recorded greeting message is played, followed by a tone.
  * Then, recording starts, and continues until the handset is replaced.
- * Playback button allows all messages currently saved on SD card through earpiece 
+ * Playback button plays last recorded message
  * 
- * Files are saved on SD card as 44.1kHz, 16-bit, mono signed integer RAW audio format 
- * --> changed this to WAV recording, DD4WH 2022_07_31
- * --> added MTP support, which enables copying WAV files from the SD card via the USB connection, DD4WH 2022_08_01
- * 
- * 
- * Frank DD4WH, August 1st 2022 
- * for a DBP 611 telephone (closed contact when handheld is lifted) & with recording to WAV file
- * contact for switch button 0 is closed when handheld is lifted
- * 
- * GNU GPL v3.0 license
+ * Files are saved on SD card as 44.1kHz, 16-bit, mono WAV files 
+ * MTP support included for access to recordings via USB
  * 
  */
 
@@ -39,6 +31,8 @@
 #define HOOK_PIN 0
 #define PLAYBACK_BUTTON_PIN 1
 #define REDIAL_BUTTON_PIN 3
+#define VOLUME 0.5
+#define GAIN 30
 
 #define noINSTRUMENT_SD_WRITE
 
@@ -47,7 +41,7 @@
 // Inputs
 AudioSynthWaveform waveform1;                        // To create the "beep" sfx
 AudioInputI2S i2s2;                                  // I2S input from microphone on audio shield
-AudioPlaySdWavX playWav1;                            // Play 44.1kHz 16-bit PCM greeting WAV file
+AudioPlaySdWavX playWav1;                            // Play 44.1kHz 16-bit PCM WAV files
 AudioRecordQueue queue1;                             // Creating an audio buffer in memory before saving to SD
 AudioMixer4 mixer;                                   // Allows merging several inputs to same output
 AudioOutputI2S i2s1;                                 // I2S interface to Speaker/Line Out on Audio shield
@@ -63,7 +57,7 @@ char filename[15];
 // The file object itself
 File frec;
 
-// Use long 40ms debounce time on both switches
+// Use long 40ms debounce time on switches
 Bounce buttonRecord = Bounce(HOOK_PIN, 40);
 Bounce buttonPlay = Bounce(PLAYBACK_BUTTON_PIN, 40);
 Bounce buttonRedial = Bounce(REDIAL_BUTTON_PIN, 40);
@@ -117,8 +111,8 @@ void setup() {
   sgtl5000_1.enable();
   // Define which input on the audio shield to use (AUDIO_INPUT_LINEIN / AUDIO_INPUT_MIC)
   sgtl5000_1.inputSelect(AUDIO_INPUT_MIC);
-  //sgtl5000_1.adcHighPassFilterDisable(); //
-  sgtl5000_1.volume(0.5);
+
+  sgtl5000_1.volume(VOLUME);
 
   mixer.gain(0, 1.0f);
   mixer.gain(1, 1.0f);
@@ -150,13 +144,11 @@ void setup() {
   MTPcheckInterval = MTP.storage()->get_DeltaDeviceCheckTimeMS();
 
   // Value in dB
-  //  sgtl5000_1.micGain(15);
-  sgtl5000_1.micGain(30);  // much lower gain is required for the AOM5024 electret capsule
+  sgtl5000_1.micGain(GAIN);
 
   // Synchronise the Time object used in the program code with the RTC time provider.
   // See https://github.com/PaulStoffregen/Time
   setSyncProvider(getTeensy3Time);
-
   // Define a callback that will assign the correct datetime for any file system operations
   // (i.e. saving a new audio recording onto the SD card)
   FsDateTime::setCallback(dateTime);
@@ -205,7 +197,6 @@ void loop() {
         }
         if (buttonPlay.fallingEdge()) {
           playWav1.stop();
-          //playAllRecordings();
           playLastRecording();
           return;
         }
@@ -213,7 +204,6 @@ void loop() {
           Serial.println("Redial Button Pressed");
         }
       }
-      // Debug message
       Serial.println("Starting Recording");
       // Play the tone sound effect
       waveform1.begin(beep_volume, 440, WAVEFORM_SINE);
@@ -261,16 +251,15 @@ void setMTPdeviceChecks(bool nable) {
 
 #if defined(INSTRUMENT_SD_WRITE)
 static uint32_t worstSDwrite, printNext;
-#endif  // defined(INSTRUMENT_SD_WRITE)
+#endif
 
 void startRecording() {
   setMTPdeviceChecks(false);  // disable MTP device checks while recording
 #if defined(INSTRUMENT_SD_WRITE)
   worstSDwrite = 0;
   printNext = 0;
-#endif  // defined(INSTRUMENT_SD_WRITE)
+#endif
   // Find the first available file number
-  //  for (uint8_t i=0; i<9999; i++) { // BUGFIX uint8_t overflows if it reaches 255
   for (uint16_t i = 0; i < 9999; i++) {
     // Format the counter as a five-digit number with leading zeroes, followed by file extension
     snprintf(filename, 11, " %05d.wav", i);
@@ -362,10 +351,6 @@ void playAllRecordings() {
       end_Beep();
       break;
     }
-    //int8_t len = strlen(entry.name()) - 4;
-    //    if (strstr(strlwr(entry.name() + (len - 4)), ".raw")) {
-    //    if (strstr(strlwr(entry.name() + (len - 4)), ".wav")) {
-    // the lines above throw a warning, so I replace them with this (which is also easier to read):
     if (strstr(entry.name(), ".wav") || strstr(entry.name(), ".WAV")) {
       Serial.print("Now playing ");
       Serial.println(entry.name());
@@ -380,12 +365,10 @@ void playAllRecordings() {
     }
     entry.close();
 
-    //    while (playWav1.isPlaying()) { // strangely enough, this works for playRaw, but it does not work properly for playWav
     while (!playWav1.isStopped()) {  // this works for playWav
       buttonPlay.update();
       buttonRecord.update();
       // Button is pressed again
-      //      if(buttonPlay.risingEdge() || buttonRecord.risingEdge()) { // FIX
       if (buttonPlay.fallingEdge() || buttonRecord.risingEdge()) {
         playWav1.stop();
         mode = Mode::Ready;
@@ -421,7 +404,6 @@ void playLastRecording() {
     buttonPlay.update();
     buttonRecord.update();
     // Button is pressed again
-    //      if(buttonPlay.risingEdge() || buttonRecord.risingEdge()) { // FIX
     if (buttonPlay.fallingEdge() || buttonRecord.risingEdge()) {
       playWav1.stop();
       mode = Mode::Ready;
