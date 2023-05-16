@@ -31,8 +31,11 @@
 #define HOOK_PIN 0
 #define PLAYBACK_BUTTON_PIN 1
 #define REDIAL_BUTTON_PIN 3
+// Gains and volumes
 #define VOLUME 0.5
 #define GAIN 30
+
+float beep_volume = 0.08f;  // not too loud :-)
 
 #define noINSTRUMENT_SD_WRITE
 
@@ -57,6 +60,10 @@ char filename[15];
 // The file object itself
 File frec;
 
+bool greetingSaved = false;  // Keeps track of if greeting.wav is "saved".
+// It is set to false when missing on bootup and true when redial is clicked three times.
+// This allows the user to record the greeting multiple times.
+
 // Use long 40ms debounce time on switches
 Bounce buttonRecord = Bounce(HOOK_PIN, 40);
 Bounce buttonPlay = Bounce(PLAYBACK_BUTTON_PIN, 40);
@@ -67,10 +74,13 @@ enum Mode { Initialising,
             Ready,
             Prompting,
             Recording,
-            Playing };
+            Playing,
+};
 Mode mode = Mode::Initialising;
 
-float beep_volume = 0.08f;  // not too loud :-)
+unsigned int buttonRecordCount = 0;
+unsigned int buttonPlayCount = 0;
+unsigned int buttonRedialCount = 0;
 
 uint32_t MTPcheckInterval;  // default value of device check interval [ms]
 
@@ -90,7 +100,6 @@ byte byte1, byte2, byte3, byte4;
 
 
 void setup() {
-
   Serial.begin(9600);
   while (!Serial && millis() < 5000) {
     // wait for serial port to connect.
@@ -126,14 +135,15 @@ void setup() {
       delay(500);
     }
   } else Serial.println("SD card correctly initialized");
-
-  // Play a beep to indicate system is online
-  sgtl5000_1.volume(0.7);
-  waveform1.begin(0.4f, 440, WAVEFORM_SINE);
-  wait(1000);
-  waveform1.amplitude(0);
-  sgtl5000_1.volume(VOLUME);
-  delay(1000);
+  if (SD.exists("greeting.wav")) {
+    greetingSaved = true;
+    Serial.println("greeting.wav file initialized");
+    playLoudBeep(1000);
+  } else {
+    Serial.println("No greeting.wav file on SD card");
+  }
+  // Play a beep to indicate system is online (2 beeps with greeting)
+  playLoudBeep(500);
 
 
   // mandatory to begin the MTP session.
@@ -160,9 +170,8 @@ void setup() {
 
 void loop() {
   // First, read the buttons
-  buttonRecord.update();
-  buttonPlay.update();
-  buttonRedial.update();
+  updateButtons();
+  // Serial.println("main loop");
 
   switch (mode) {
     case Mode::Ready:
@@ -172,25 +181,59 @@ void loop() {
         mode = Mode::Prompting;
         print_mode();
       } else if (buttonPlay.fallingEdge()) {
-        //playAllRecordings();
-        playLastRecording();
+        Serial.println("falling edge play");
+        shortBeep();
+        if (!buttonRecord.read()) {
+          Serial.println("Phone already at ear");
+          playLastRecording();
+        } else {
+          wait(1500);  // wait for handset to be picked up
+          if (buttonRecordCount >= 1) {
+            buttonRecordCount = 0;
+            Serial.println("Handset lifted and playing");
+            shortBeep();
+            playLastRecording();
+          }
+        }
+
+      } else if (buttonRedial.risingEdge()) {
+        if (greetingSaved) {
+          wait(1500);
+          Serial.println("DEBUG: redial rising greetingSaved");
+          if (buttonRecordCount >= 1) {
+            Serial.println("Handset lifted. Playing all files");
+            playAllRecordings();
+          }
+        } else {
+          wait(1000);
+          Serial.println("DEBUG: redial rising no greeting");
+          buttonRecord.update();
+          if (buttonRedialCount == 2 && !buttonRecord.fallingEdge()) {
+            // redial was clicked three times in a second and phone on base
+            if (findLastFileName()) {
+              Serial.print("Last file found: ");
+              Serial.println(filename);
+              SD.rename(filename, "greeting.wav");
+              greetingSaved = true;
+              playLoudBeep(1000);
+              playLoudBeep(250);
+              playLoudBeep(250);
+            }
+          }
+        }
       }
       break;
 
     case Mode::Prompting:
       // Wait a second for users to put the handset to their ear
-      wait(1000);
+      wait(1500);
       // Play the greeting inviting them to record their message
       playWav1.play("greeting.wav");
       // Wait until the  message has finished playing
-      //      while (playWav1.isPlaying()) {
       while (!playWav1.isStopped()) {
         // Check whether the handset is replaced
-        buttonRecord.update();
-        buttonPlay.update();
-        buttonRedial.update();
-        // Handset is replaced
-        if (buttonRecord.risingEdge() || (buttonRecord.duration()>=1500 && buttonRecord.read())) {
+        updateButtons();
+        if (buttonRecord.risingEdge() || (buttonRecord.duration() >= 2000 && buttonRecord.read())) {
           playWav1.stop();
           mode = Mode::Ready;
           print_mode();
@@ -198,29 +241,27 @@ void loop() {
         }
         if (buttonPlay.fallingEdge()) {
           playWav1.stop();
+          shortBeep();
           playLastRecording();
           return;
-        }
-        if (buttonRedial.risingEdge()) {
-          Serial.println("Redial Button Pressed");
         }
       }
       Serial.println("Starting Recording");
       // Play the tone sound effect
       waveform1.begin(beep_volume, 440, WAVEFORM_SINE);
       wait(1250);
-      waveform1.amplitude(0);
+      // waveform ends within function
       // Start the recording function
       startRecording();
       break;
 
     case Mode::Recording:
-      // Handset is replaced
-      if (buttonRecord.risingEdge() || (buttonRecord.duration()>300000)) {
+      // Handset is replaced or has been off hook for 5 minutes
+      if (buttonRecord.risingEdge() || (buttonRecord.duration() > 300000)) {
         Serial.println("Stopping Recording");
         stopRecording();
         // Play audio tone to confirm recording has ended
-        end_Beep();
+        endBeep();
       } else {
         continueRecording();
       }
@@ -234,6 +275,15 @@ void loop() {
   }
 
   MTP.loop();  // This is mandatory to be placed in the loop code.
+}
+
+void playLoudBeep(int duration) {
+  sgtl5000_1.volume(0.7);
+  waveform1.begin(0.4f, 440, WAVEFORM_SINE);
+  wait(duration);
+  waveform1.amplitude(0);
+  sgtl5000_1.volume(VOLUME);
+  delay(duration);
 }
 
 void setMTPdeviceChecks(bool nable) {
@@ -260,8 +310,8 @@ void startRecording() {
 #endif
   // Find the first available file number
   for (uint16_t i = 0; i < 9999; i++) {
-    // Format the counter as a five-digit number with leading zeroes, followed by file extension
-    snprintf(filename, 11, " %05d.wav", i);
+    // Format the counter as a four-digit number with leading zeroes, followed by file extension
+    snprintf(filename, 11, "%04d.wav", i);
     // Create if does not exist, do not open existing, write, sync after write
     if (!SD.exists(filename)) {
       break;
@@ -278,6 +328,7 @@ void startRecording() {
   } else {
     Serial.println("Couldn't open file to record!");
   }
+  waveform1.amplitude(0);
 }
 
 void continueRecording() {
@@ -333,6 +384,12 @@ void stopRecording() {
   setMTPdeviceChecks(true);  // enable MTP device checks, recording is finished
 }
 
+void updateButtons() {
+  buttonRecord.update();
+  buttonPlay.update();
+  buttonRedial.update();
+}
+
 
 void playAllRecordings() {
   // Recording files are saved in the root directory
@@ -346,7 +403,7 @@ void playAllRecordings() {
     if (!entry) {
       // no more files
       entry.close();
-      end_Beep();
+      endBeep();
       break;
     }
     if (strstr(entry.name(), ".wav") || strstr(entry.name(), ".WAV")) {
@@ -364,14 +421,17 @@ void playAllRecordings() {
     entry.close();
 
     while (!playWav1.isStopped()) {  // this works for playWav
-      buttonPlay.update();
-      buttonRecord.update();
-      // Button is pressed again
-      if (buttonPlay.fallingEdge() || buttonRecord.risingEdge()) {
+      updateButtons();
+      // Press play to move to next file. Place phone down to stop
+      if (buttonRecord.risingEdge()) {
         playWav1.stop();
         mode = Mode::Ready;
         print_mode();
         return;
+      }
+      if (buttonPlay.fallingEdge()) {
+        playWav1.stop();
+        break;  // next message
       }
     }
   }
@@ -380,39 +440,52 @@ void playAllRecordings() {
   print_mode();
 }
 
-void playLastRecording() {
-  // Find the first available file number
+bool findLastFileName() {
+  // Find the last available file number
   uint16_t idx = 0;
+  bool found = false;
   for (uint16_t i = 0; i < 9999; i++) {
-    // Format the counter as a five-digit number with leading zeroes, followed by file extension
-    snprintf(filename, 11, " %05d.wav", i);
+    // Format the counter as a four-digit number with leading zeroes, followed by file extension
+    snprintf(filename, 11, "%04d.wav", i);
     // check, if file with index i exists
     if (!SD.exists(filename)) {
-      idx = i - 1;
+      idx = i - 1;  // we found a number bigger than last file so minus one
       break;
+    } else {
+      found = true;
     }
   }
-  // now play file with index idx == last recorded file
-  snprintf(filename, 11, " %05d.wav", idx);
-  Serial.println(filename);
-  playWav1.play(filename);
-  mode = Mode::Playing;
-  print_mode();
-  while (!playWav1.isStopped()) {  // this works for playWav
-    buttonPlay.update();
-    buttonRecord.update();
-    // Button is pressed again
-    if (buttonPlay.fallingEdge() || buttonRecord.risingEdge()) {
-      playWav1.stop();
-      mode = Mode::Ready;
-      print_mode();
-      return;
-    }
+  if (found) {
+    // set filename with index idx == last recorded file
+    snprintf(filename, 11, "%04d.wav", idx);
   }
-  // file has been played
+  return found;
+}
+
+void playLastRecording() {
+  if (findLastFileName()) {
+    Serial.print("Playing ");
+    Serial.println(filename);
+    playWav1.play(filename);
+    mode = Mode::Playing;
+    print_mode();
+    while (!playWav1.isStopped()) {  // this works for playWav
+      updateButtons();
+      // Button is pressed again
+      if (buttonPlay.fallingEdge() || buttonRecord.risingEdge()) {
+        playWav1.stop();
+        mode = Mode::Ready;
+        print_mode();
+        return;
+      }
+    }
+    // file has been played
+  } else {
+    Serial.println("No recordings to play");
+  }
   mode = Mode::Ready;
   print_mode();
-  end_Beep();
+  endBeep();
 }
 
 
@@ -439,15 +512,30 @@ void dateTime(uint16_t* date, uint16_t* time, uint8_t* ms10) {
 void wait(unsigned int milliseconds) {
   elapsedMillis msec = 0;
 
+  buttonRecordCount = 0;
+  buttonPlayCount = 0;
+  buttonRedialCount = 0;
+
   while (msec <= milliseconds) {
-    buttonRecord.update();
-    buttonPlay.update();
-    buttonRedial.update();
-    if (buttonRecord.fallingEdge()) Serial.println("Button (pin 0) Press");
-    if (buttonRecord.risingEdge()) Serial.println("Button (pin 0) Release");
-    if (buttonPlay.fallingEdge()) Serial.println("Button (pin 1) Press");
-    if (buttonPlay.risingEdge()) Serial.println("Button (pin 1) Release");
-    if (buttonRedial.fallingEdge()) Serial.println("Button (pin 3) Press");
+    updateButtons();
+    if (buttonRecord.fallingEdge()) {
+      Serial.println("Button (pin 0) Press");
+      buttonRecordCount++;
+    }
+    if (buttonRecord.risingEdge()) {
+      Serial.println("Button (pin 0) Release");
+    }
+    if (buttonPlay.fallingEdge()) {
+      Serial.println("Button (pin 1) Press");
+      buttonPlayCount++;
+    }
+    if (buttonPlay.risingEdge()) {
+      Serial.println("Button (pin 1) Release");
+    }
+    if (buttonRedial.fallingEdge()) {
+      Serial.println("Button (pin 3) Press");
+      buttonRedialCount++;
+    }
     if (buttonRedial.risingEdge()) Serial.println("Button (pin 3) Release");
   }
 }
@@ -526,7 +614,14 @@ void writeOutHeader() {  // update WAV header with final filesize/datasize
   Serial.println(Subchunk2Size);
 }
 
-void end_Beep(void) {
+void shortBeep() {
+  waveform1.frequency(523.25);
+  waveform1.amplitude(beep_volume);
+  wait(250);
+  waveform1.amplitude(0);
+}
+
+void endBeep(void) {
   waveform1.frequency(523.25);
   waveform1.amplitude(beep_volume);
   wait(250);
@@ -546,13 +641,13 @@ void end_Beep(void) {
 }
 
 void print_mode(void) {  // only for debugging
-  Serial.print("Mode switched to: ");
+  Serial.print("Mode switched to:  ");
   // Initialising, Ready, Prompting, Recording, Playing
-  if (mode == Mode::Ready) Serial.println(" Ready");
-  else if (mode == Mode::Prompting) Serial.println(" Prompting");
-  else if (mode == Mode::Recording) Serial.println(" Recording");
-  else if (mode == Mode::Playing) Serial.println(" Playing");
-  else if (mode == Mode::Initialising) Serial.println(" Initialising");
-  else Serial.println(" Undefined");
+  if (mode == Mode::Ready) Serial.println("Ready");
+  else if (mode == Mode::Prompting) Serial.println("Prompting");
+  else if (mode == Mode::Recording) Serial.println("Recording");
+  else if (mode == Mode::Playing) Serial.println("Playing");
+  else if (mode == Mode::Initialising) Serial.println("Initialising");
+  else Serial.println("Undefined");
   Serial.println("");
 }
