@@ -70,7 +70,7 @@ enum Mode { Initialising,
             Playing };
 Mode mode = Mode::Initialising;
 
-float beep_volume = 0.04f;  // not too loud :-)
+float beep_volume = 0.08f;  // not too loud :-)
 
 uint32_t MTPcheckInterval;  // default value of device check interval [ms]
 
@@ -111,17 +111,10 @@ void setup() {
   sgtl5000_1.enable();
   // Define which input on the audio shield to use (AUDIO_INPUT_LINEIN / AUDIO_INPUT_MIC)
   sgtl5000_1.inputSelect(AUDIO_INPUT_MIC);
-
   sgtl5000_1.volume(VOLUME);
 
   mixer.gain(0, 1.0f);
   mixer.gain(1, 1.0f);
-
-  // Play a beep to indicate system is online
-  waveform1.begin(beep_volume, 440, WAVEFORM_SINE);
-  wait(1000);
-  waveform1.amplitude(0);
-  delay(1000);
 
   // Initialize the SD card
   SPI.setMOSI(SDCARD_MOSI_PIN);
@@ -133,6 +126,14 @@ void setup() {
       delay(500);
     }
   } else Serial.println("SD card correctly initialized");
+
+  // Play a beep to indicate system is online
+  sgtl5000_1.volume(0.7);
+  waveform1.begin(0.4f, 440, WAVEFORM_SINE);
+  wait(1000);
+  waveform1.amplitude(0);
+  sgtl5000_1.volume(VOLUME);
+  delay(1000);
 
 
   // mandatory to begin the MTP session.
@@ -189,7 +190,7 @@ void loop() {
         buttonPlay.update();
         buttonRedial.update();
         // Handset is replaced
-        if (buttonRecord.risingEdge()) {
+        if (buttonRecord.risingEdge() || (buttonRecord.duration()>=1500 && buttonRecord.read())) {
           playWav1.stop();
           mode = Mode::Ready;
           print_mode();
@@ -215,10 +216,8 @@ void loop() {
 
     case Mode::Recording:
       // Handset is replaced
-      if (buttonRecord.risingEdge()) {
-        // Debug log
+      if (buttonRecord.risingEdge() || (buttonRecord.duration()>300000)) {
         Serial.println("Stopping Recording");
-        // Stop recording
         stopRecording();
         // Play audio tone to confirm recording has ended
         end_Beep();
@@ -269,7 +268,6 @@ void startRecording() {
     }
   }
   frec = SD.open(filename, FILE_WRITE);
-  Serial.println("Opened file !");
   if (frec) {
     Serial.print("Recording to ");
     Serial.println(filename);
@@ -444,10 +442,13 @@ void wait(unsigned int milliseconds) {
   while (msec <= milliseconds) {
     buttonRecord.update();
     buttonPlay.update();
+    buttonRedial.update();
     if (buttonRecord.fallingEdge()) Serial.println("Button (pin 0) Press");
-    if (buttonPlay.fallingEdge()) Serial.println("Button (pin 1) Press");
     if (buttonRecord.risingEdge()) Serial.println("Button (pin 0) Release");
+    if (buttonPlay.fallingEdge()) Serial.println("Button (pin 1) Press");
     if (buttonPlay.risingEdge()) Serial.println("Button (pin 1) Release");
+    if (buttonRedial.fallingEdge()) Serial.println("Button (pin 3) Press");
+    if (buttonRedial.risingEdge()) Serial.println("Button (pin 3) Release");
   }
 }
 
@@ -553,4 +554,5 @@ void print_mode(void) {  // only for debugging
   else if (mode == Mode::Playing) Serial.println(" Playing");
   else if (mode == Mode::Initialising) Serial.println(" Initialising");
   else Serial.println(" Undefined");
+  Serial.println("");
 }
