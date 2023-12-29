@@ -32,10 +32,10 @@
 #define PLAYBACK_BUTTON_PIN 1
 #define REDIAL_BUTTON_PIN 3
 // Gains and volumes
-#define VOLUME 0.5
+#define VOLUME 0.8
 #define GAIN 30
 
-float beep_volume = 0.08f;  // not too loud :-)
+float beep_volume = 0.16f;  // not too loud :-)
 
 #define noINSTRUMENT_SD_WRITE
 
@@ -249,10 +249,12 @@ void loop() {
       Serial.println("Starting Recording");
       // Play the tone sound effect
       waveform1.begin(beep_volume, 440, WAVEFORM_SINE);
-      wait(1250);
-      // waveform ends within function
       // Start the recording function
       startRecording();
+      wait(1250);
+      // waveform ends within function
+      waveform1.amplitude(0);
+      
       break;
 
     case Mode::Recording:
@@ -328,7 +330,6 @@ void startRecording() {
   } else {
     Serial.println("Couldn't open file to record!");
   }
-  waveform1.amplitude(0);
 }
 
 void continueRecording() {
